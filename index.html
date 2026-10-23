@@ -62,9 +62,9 @@
   .sw input:checked+span::after{transform:translateX(20px);background:#fff}
 
   /* ---------- water card ---------- */
-  .water ul{list-style:none}
-  .water li{padding:8px 0;border-bottom:1px dashed rgba(255,255,255,.08);font-size:.92rem;color:#dbe6f5}
-  .water li:last-child{border-bottom:0}
+  .water ul,.bginfo ul{list-style:none}
+  .water li,.bginfo li{padding:8px 0;border-bottom:1px dashed rgba(255,255,255,.08);font-size:.92rem;color:#dbe6f5}
+  .water li:last-child,.bginfo li:last-child{border-bottom:0}
   .water b{color:var(--amber)}
 
   /* ---------- schedule list ---------- */
@@ -112,8 +112,8 @@
     </div>
     <div class="enablerow">
       <div>
-        <button id="enableBtn" class="btn primary">🔔 1. Enable Sound &amp; Notifications</button>
-        <div id="audioStatus" style="margin-top:6px">Click once after opening — browsers require this for alarms.</div>
+        <button id="enableBtn" class="btn primary">🔔 1. Enable Notifications (click once)</button>
+        <div id="audioStatus" style="margin-top:6px">Allows Windows toast alarms even when this page is minimised or you're working in another app.</div>
       </div>
     </div>
   </div>
@@ -131,9 +131,22 @@
         <div id="nextWhat">--</div>
       </div>
       <div class="nc-btns">
-        <button id="muteBtn" class="btn ghost">🔔 Sound On</button>
-        <button id="testBtn" class="btn ghost">🧪 Test</button>
+        <button id="toastBtn" class="btn ghost">🪟 Test Toast</button>
+        <button id="testBtn" class="btn ghost">🧪 Test Alarm</button>
+        <button id="muteBtn" class="btn ghost">🔔 Sound</button>
       </div>
+    </section>
+
+    <section class="card bginfo">
+      <h2>🪟 How alarms reach you — even in the background</h2>
+      <ul>
+        <li>🥇 <b>Windows toast notification (main alarm)</b> — pops up over ANY app you are using; if missed it waits in the notification centre. Works even with system sound disabled.</li>
+        <li>🥈 <b>Full-screen overlay + countdown</b> — appears whenever this page is visible.</li>
+        <li>🥉 <b>Flashing tab title</b> — visible on the browser's taskbar button.</li>
+        <li>✅ <b>Setup check:</b> click "🪟 Test Toast", then minimise the browser — the toast must still appear bottom-right.</li>
+        <li>⚙️ No toast appearing? Windows Settings → System → Notifications → enable for Chrome/Edge, and turn OFF Focus Assist / Do Not Disturb during work hours.</li>
+        <li>📌 Keep the browser running with this tab open — minimised is fine. A worker timer keeps alarms minute-accurate in the background.</li>
+      </ul>
     </section>
 
     <section class="grid">
@@ -188,7 +201,7 @@
   </div>
 
   <footer>
-    ⚙️ Keep this tab open (it works offline — no internet needed). Alarms are minute-accurate; in background tabs some browsers delay them by up to 1 minute, so keep the tab visible if possible.<br>
+    ⚙️ Keep the browser running with this tab open (works offline — no internet needed). Minimised or behind other apps is fine: alarms arrive as Windows toast notifications. If toasts stop appearing, check Windows Settings → System → Notifications and turn off Focus Assist.<br>
     ✏️ To change any time or interval: open this file in a text editor and edit the <b>CONFIG</b> block at the top of the script section.<br>
     🩺 General wellness tool — not medical advice. Sources: WHO / CDC / NHS / AOA guidance.
   </footer>
@@ -213,6 +226,21 @@ const KIND = {
   refill: { icon:'🚰', name:'Refill Bottle', color:'#fbbf24' },
   walk:   { icon:'🚶', name:'Lunch Walk',    color:'#a78bfa' }
 };
+
+const ICONS = {};
+function buildIcons() {
+  try {
+    Object.keys(KIND).forEach(k => {
+      const c = document.createElement('canvas'); c.width = c.height = 128;
+      const x = c.getContext('2d');
+      x.fillStyle = '#101b38'; x.beginPath(); x.arc(64, 64, 62, 0, Math.PI * 2); x.fill();
+      x.lineWidth = 6; x.strokeStyle = KIND[k].color; x.stroke();
+      x.font = '68px serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillText(KIND[k].icon, 64, 70);
+      ICONS[k] = c.toDataURL('image/png');
+    });
+  } catch (e) {}
+}
 /* ==================================================================== */
 
 const $ = s => document.querySelector(s);
@@ -298,25 +326,32 @@ function tick() {
   document.querySelectorAll('#scheduleList .row').forEach(r => r.classList.toggle('past', +r.dataset.m < nowM));
 
   const cur = now.getHours() * 60 + now.getMinutes();
-  if (cur !== lastMinute) {
+  if (lastMinute < 0) {
     lastMinute = cur;
     const item = schedule.find(it => it.m === cur);
-    const key = schedDate + ':' + cur;
-    if (item && !fired[key]) { fired[key] = 1; fire(item); }
+    if (item) { const key = schedDate + ':' + cur; if (!fired[key]) { fired[key] = 1; fire(item, false); } }
+  } else if (cur !== lastMinute) {
+    const due = schedule.filter(it => it.m > lastMinute && it.m <= cur && !fired[schedDate + ':' + it.m]);
+    lastMinute = cur;
+    due.forEach(it => { fired[schedDate + ':' + it.m] = 1; });
+    const kinds = [];
+    due.forEach(it => it.kinds.forEach(k => { if (state.toggles[k] && !kinds.includes(k)) kinds.push(k); }));
+    const earliest = due.length ? Math.min.apply(null, due.map(it => it.m)) : cur;
+    if (kinds.length && cur - earliest <= 15) fire({ kinds }, earliest !== cur);
   }
 }
 
 /* ---------------- alarm firing ---------------- */
-function fire(item) {
+function fire(item, missed) {
   const kinds = item.kinds.filter(k => state.toggles[k]);
   if (!kinds.length) return;
-  showOverlay(kinds);
+  showOverlay(kinds, missed);
   alarmSound();
-  notify(kinds);
-  flashStart(kinds);
+  notify(kinds, missed);
+  flashStart(kinds, missed);
 }
 
-function showOverlay(kinds) {
+function showOverlay(kinds, missed) {
   clearTimeout(ovTimer);
   const lines = {
     stand:  ['🧍 Stand up & move for 2–3 minutes — corridor walk, stretch, roll your shoulders',
@@ -325,9 +360,10 @@ function showOverlay(kinds) {
     refill: ['🚰 Refill your 1 L bottle at the water cooler now'],
     walk:   ['🚶 Easy 5-minute walk after lunch (1:25 – 1:30 PM) — skip the lift, stretch your legs']
   };
-  const titles = kinds.map(k => KIND[k].icon + ' ' + KIND[k].name).join(' + ');
+  const titles = (missed ? '⏰ ' : '') + kinds.map(k => KIND[k].icon + ' ' + KIND[k].name).join(' + ');
   let html = '<div class="ov-card"><div class="ov-ics">' + kinds.map(k => KIND[k].icon).join(' ') + '</div>' +
-    '<h2>' + titles + '</h2><ul>' +
+    '<h2>' + titles + '</h2>' +
+    (missed ? '<div class="cdl">You were away — do it now</div>' : '') + '<ul>' +
     kinds.map(k => lines[k].map(l => '<li>' + l + '</li>').join('')).join('') + '</ul>';
   if (kinds.includes('eye'))  html += '<div class="cd" id="eyeCd">20</div><div class="cdl">seconds — look far away…</div>';
   if (kinds.includes('walk')) html += '<div class="cd" id="walkCd">5:00</div><div class="cdl">minutes — walking timer</div>';
@@ -364,10 +400,10 @@ function closeOverlay() {
 }
 
 /* ---------------- tab-title flash ---------------- */
-function flashStart(kinds) {
+function flashStart(kinds, missed) {
   flashStop();
   let f = false;
-  const t = kinds.map(k => KIND[k].icon + ' ' + KIND[k].name).join(' + ');
+  const t = (missed ? '⏰ ' : '') + kinds.map(k => KIND[k].icon + ' ' + KIND[k].name).join(' + ');
   flashIv = setInterval(() => { document.title = (f = !f) ? '⏰ ' + t : BASE_TITLE; }, 900);
 }
 function flashStop() { if (flashIv) { clearInterval(flashIv); flashIv = null; } }
@@ -401,13 +437,16 @@ function ding() {
 }
 
 /* ---------------- notifications ---------------- */
-function notify(kinds) {
+function notify(kinds, missed) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     const bodies = { stand:'Stand up, move 2–3 min + sip water', eye:'Look 20 ft away for 20 seconds',
                      refill:'Refill your 1 L water bottle', walk:'5-minute post-lunch walk' };
-    new Notification(kinds.map(k => KIND[k].icon + ' ' + KIND[k].name).join(' + '),
-      { body: kinds.map(k => bodies[k]).join(' • '), tag: 'office-health-reminder' });
+    const n = new Notification((missed ? '⏰ (missed) ' : '') +
+      kinds.map(k => KIND[k].icon + ' ' + KIND[k].name).join(' + '),
+      { body: kinds.map(k => bodies[k]).join(' • '), tag: 'office-health-reminder',
+        requireInteraction: true, icon: ICONS[kinds[0]] || ICONS.stand });
+    n.onclick = () => { try { n.close(); } catch (e) {} };
   } catch (e) {}
 }
 
@@ -416,11 +455,40 @@ async function enableAll() {
   audioReady = true;
   ensureAudio();
   alarmSound();
-  let perm = 'not supported here';
+  let perm = 'not supported';
   if ('Notification' in window) { try { perm = await Notification.requestPermission(); } catch (e) {} }
-  $('#audioStatus').textContent = '✅ Sound ready · Notifications: ' + perm;
-  $('#enableBtn').textContent = '🔊 Reminders Active';
+  $('#audioStatus').textContent = perm === 'granted'
+    ? '✅ Toast notifications ON — alarms will pop even when minimised. Sound is optional.'
+    : '⚠️ Notification permission: ' + perm + '. Click "🪟 Test Toast" and allow it — toasts are the main alarm.';
+  $('#enableBtn').textContent = '🔔 Notifications ' + (perm === 'granted' ? 'Enabled ✓' : 'Requested');
   $('#enableBtn').disabled = true;
+}
+
+function testToast() {
+  if (!('Notification' in window)) {
+    $('#audioStatus').textContent = '❌ This browser does not support notifications — use Chrome or Edge.';
+    return;
+  }
+  Notification.requestPermission().then(p => {
+    if (p === 'granted') {
+      notify(['stand', 'eye'], false);
+      $('#audioStatus').textContent = '✅ Toast sent — minimise the browser now and check the bottom-right corner.';
+    } else {
+      $('#audioStatus').textContent = '❌ Notification permission: ' + p + '. Allow it and test again (also check Windows notification settings).';
+    }
+  }).catch(() => {});
+}
+
+function startTicker() {
+  const src = 'let iv=null;onmessage=function(e){if(e.data==="start"&&iv===null){iv=setInterval(function(){postMessage("t")},1000);}};';
+  try {
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
+    w.onmessage = () => tick();
+    w.onerror = () => { w.terminate(); setInterval(tick, 1000); };
+    w.postMessage('start');
+  } catch (e) {
+    setInterval(tick, 1000);
+  }
 }
 
 function init() {
@@ -439,8 +507,10 @@ function init() {
     el.addEventListener('change', () => { state.toggles[k] = el.checked; save(); });
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeOverlay(); });
+  $('#toastBtn').addEventListener('click', testToast);
+  buildIcons();
   ensureSchedule();
-  setInterval(tick, 1000);
+  startTicker();
   tick();
 }
 document.addEventListener('DOMContentLoaded', init);
